@@ -35,13 +35,22 @@ void init(void)
 	MCUCR=(1<<JTD); 
 	MCUCR=(1<<JTD);//We have to do it twice!
 
-	////////////////// 8Bit PWM PD6 & PD7 ///////////////
+	////////////////// 8Bit PWM PD6 & PD7 In OC2 ///////////////
 	TCCR2A=0b10100101;
 	TCCR2B=0b00000011;//WGM22 oFF, we have CTC mode of operation
 	//TCCR2B=0b00001010;//prescaller de 8
 	//Max value of the OCR
 	OCR2A = 255;
 	OCR2B = 255;
+	
+	///////////// 8Bit PWM PD5 In OC1 //////
+	TCCR1A=0b10100001;
+	TCCR1B=0b00001001;//WGM22 oFF, we have CTC mode of operation
+	TCCR1C = 0b11000000;
+	//Max value of the OCR, we only use one
+	OCR1A = 255;
+	OCR1B = 255;	
+	
 	//////////////timer 1, 16bits sonar/////
 	//TCCR1A=0X00;
 	//TCCR1B=(1<<CS10);
@@ -76,13 +85,25 @@ ISR (TIMER0_COMPA_vect) //Timer interruption
 	}
 	if (CNT_20ms == 0)
 	{
-		OCR2A++;	
-		if(OCR2A == 254)
-			OCR2A = 0;
-			
-		OCR2B++;
-		if(OCR2B == 254)
-			OCR2B = 0;
+		OCR1B = OCR1A = 50;
+		OCR2A = 250;
+		OCR2B = 70;
+
+		//OCR2A++;
+		//if(OCR2A == 254)
+		//	OCR2A = 0;
+		//
+		//OCR2B++;
+		//if(OCR2B == 254)
+		//	OCR2B = 0;
+		
+		//OCR1B++;
+		//if(OCR1B == 254)
+		//	OCR1B = 0;
+		//	
+		//OCR1A++;
+		//if(OCR1A == 254)
+		//	OCR1A = 0;
 			
 		CNT_20ms = 10;
 	}	
