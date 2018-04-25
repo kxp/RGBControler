@@ -19,10 +19,13 @@
 # define BAUD_PRESCALE ((( F_CPU) / (16UL * USART_BAUDRATE) )  - 1)		//BaudRate Prescaller calculation
 # define sei()  __asm__ __volatile__ ("sei" ::: "memory")				//Not needed.
 
+//Code defines:
+#define UART_BUFFER_SIZE  5												//all commands must have 5 chars, but only 4 are used.
+
 //Includes
 #include <avr/io.h>
 #include <avr/interrupt.h>
-#include <avr/delay.h>
+#include <util/delay.h>
 //#include <stdlib.h>
 //#include <string.h>
 //#include <stdio.h>
@@ -30,15 +33,25 @@
 //Global vars
 unsigned short int CNT_500ms = 1;
 unsigned short int CNT_50ms = 1;
-unsigned char buffer_rx[4];
+unsigned char buffer_rx[UART_BUFFER_SIZE];
+unsigned short int buffer_position = 0;
 
 //Functions declaration
 void USART_Transmit( unsigned char data );
+short process_command();
+void clear_buffer();
+void send_string(unsigned char* string);
+
+
+//Sets the colors and returns the actual value
+short int set_red(unsigned short int value);
+short int set_blue(unsigned short int value);
+short int set_green(unsigned short int value);
 
 //Actual Code
 
 //Initializes the whole HW.
-void init(void)
+void init_hw(void)
 {
 	///////////////// deactivates the JTAG (its activated in the fuses) ////////////////
 	MCUCR=(1<<JTD);
@@ -58,7 +71,7 @@ void init(void)
 
 	////////////////// 8Bit PWM PD6 & PD7 In OC2 ///////////////
 	TCCR2A = 0b10100101;
-	TCCR2B = 0b00000011;							//WGM22 oFF, we have CTC mode of operation
+	TCCR2B = 0b00000001;							//WGM22 oFF, we have CTC mode of operation
 	//Initial value of the OCR2
 	OCR2A = 50;
 	OCR2B = 147;
@@ -83,11 +96,12 @@ void init(void)
 	SREG |= 0x80;									// Enables global interruptions, overrides "sei"
 }
 
+
 //This function is an Interruption. Its called when the Timer 0 reaches the configurated value.
 ISR (TIMER0_COMPA_vect) //Timer interruption
 {
 	CNT_500ms--;
-	CNT_50ms--;
+	//CNT_50ms--;
 	if (CNT_500ms == 0)
 	{
 		if (PORTB|= ~0b01000000)
@@ -97,33 +111,50 @@ ISR (TIMER0_COMPA_vect) //Timer interruption
 		
 		CNT_500ms = 150;
 	}
-	if (CNT_50ms == 0)
-	{
-		OCR2A++;
-		if(OCR2A == 254)
-			OCR2A = 0;
-		
-		OCR2B++;
-		if(OCR2B == 254)
-			OCR2B = 0;
-		
-		OCR1B++;
-		if(OCR1B == 254)
-			OCR1B = 0;
-			
-		OCR1A++;
-		if(OCR1A == 254)
-			OCR1A = 0;
-			
-		CNT_50ms = 15;
-	}	
+	//if (CNT_50ms == 0)
+	//{
+		//OCR2A++;
+		//if(OCR2A == 254)
+			//OCR2A = 0;
+		//
+		//OCR2B++;
+		//if(OCR2B == 254)
+			//OCR2B = 0;
+		//
+		//OCR1B++;
+		//if(OCR1B == 254)
+			//OCR1B = 0;
+			//
+		//OCR1A++;
+		//if(OCR1A == 254)
+			//OCR1A = 0;
+			//
+		//CNT_50ms = 15;
+	//}	
 }
 
 //This function is called when we receive something in the UART Port
 ISR(USART0_RX_vect)
 {	
-	buffer_rx[0] = UDR0;	
-	USART_Transmit(buffer_rx[0]);	
+	// avoid memory overrun.
+	if(buffer_position >= UART_BUFFER_SIZE)
+	{
+		buffer_position = 0;		//resets the comunication
+		return;
+	}
+
+	//store and increment
+	buffer_rx[buffer_position++] = UDR0;
+
+	USART_Transmit(buffer_rx[buffer_position - 1]);
+
+	//if (buffer_position == UART_BUFFER_SIZE)//UART_MIN_SIZE)
+	if (process_command() != 0)	
+	{
+		send_string("error\0");
+		//send_string(buffer_rx);
+		clear_buffer();
+	}	
 }
 
 //This function is used to read the available data from USART. This function will wait until data is
@@ -147,13 +178,163 @@ void USART_Transmit( unsigned char data ) // Extracted function from the datashe
 	UDR0 = data;
 }
 
+//Processes the UART command
+short process_command()
+{
+	if (buffer_position <= 0)
+		return 0;
+
+	unsigned short int color = 0;
+
+	switch(buffer_rx[0])
+	{
+		case 'o':
+		case 'O':				//turns off the LED's
+			if(buffer_rx[1] == 0xff)
+				return 0;
+
+			if(buffer_rx[1] != 'f' && buffer_rx[1] != 'F' )
+				return -1;
+
+			if(buffer_rx[2] == 0xff)
+				return 0;
+
+			if(buffer_rx[2] != 'f' && buffer_rx[2] != 'F')
+				return -1;
+
+			set_blue(0);
+			set_green(0);
+			set_red(0);
+			//when we are ready we clear the buffer
+			clear_buffer();
+
+			break;
+		case'W':
+		case'w':					//Full bright.
+			if(buffer_rx[1] == 0xff)
+				return 0;
+
+			set_blue(255);
+			set_green(255);
+			set_red(255);
+			clear_buffer();			//when we are ready we clear the buffer
+			
+			break;		
+		case '0':					//emergency turn off!
+			if(buffer_rx[1] == 0xff)
+				return 0;
+				
+			set_blue(0);
+			set_green(0);
+			set_red(0);
+			clear_buffer();
+			
+			break;
+		case 'r':
+		case 'R':					//sets the red color.
+			if(buffer_rx[1] == 0xff)
+				return 0;
+			if(buffer_rx[2] == 0xff)
+				return 0;
+			if(buffer_rx[3] == 0xff)
+				return 0;
+			
+			color = (buffer_rx[1] - 0x30) * 100 + (buffer_rx[2] - 0x30) * 10 + (buffer_rx[3] - 0x30);
+			set_red(color);
+			clear_buffer();			//when we are ready we clear the buffer
+			
+			break;
+		case 'G':
+		case 'g':					//sets the green color
+			if(buffer_rx[1] == 0xff)
+			return 0;
+			if(buffer_rx[2] == 0xff)
+			return 0;
+			if(buffer_rx[3] == 0xff)
+			return 0;
+			
+			color = (buffer_rx[1] - 0x30) * 100 + (buffer_rx[2] - 0x30) * 10 + (buffer_rx[3] - 0x30);
+			set_green(color);
+			clear_buffer();			//when we are ready we clear the buffer
+			
+			break;
+		case 'b':
+		case 'B':					//sets the blue color
+			if(buffer_rx[1] == 0xff)
+			return 0;
+			if(buffer_rx[2] == 0xff)
+			return 0;
+			if(buffer_rx[3] == 0xff)
+			return 0;
+			
+			color = (buffer_rx[1] - 0x30) * 100 + (buffer_rx[2] - 0x30) * 10 + (buffer_rx[3] - 0x30);
+			set_blue(color);
+			clear_buffer();			//when we are ready we clear the buffer
+
+			break;
+	}
+	return 0;
+}
+
 
 int main(void)
 {
-	init();	
-	
+	clear_buffer();
+	init_hw();		
+
     while (1) 
     {		 
     }
+}
+
+//Helper functions
+
+short int set_red(unsigned short int value)
+{
+	if(value < 0 || value > 0xFF)
+		return 0;
+
+	OCR2A = value;
+	
+	return OCR2A;
+}
+
+short int set_blue(unsigned short int value)
+{
+	if(value < 0 || value > 0xFF)
+		return 0;
+
+	OCR1A = value;
+	OCR1B = value;
+
+	return OCR1B;	
+}
+
+short int set_green(unsigned short int value)
+{
+	if(value < 0 || value > 0xFF)
+		return 0;
+
+	OCR2B = value;
+	
+	return OCR2B;
+}
+
+//sends a string to the UART
+void send_string(unsigned char* string)
+{
+	while (*string != '\0')
+	{
+		USART_Transmit(*string++);
+	}
+}
+
+//clears the UART buffer
+void clear_buffer()
+{
+	unsigned short i;
+	buffer_position = 0;
+	for (i = 0; i < UART_BUFFER_SIZE; i++)
+		buffer_rx[i] = 0xff;
 }
 
